@@ -134,7 +134,7 @@ class ReencodeScript
 
 				when "mp3"
 
-					system "lame --preset fast extreme #{sq src} #{sq tmp}" or raise "Error"
+					system "lame --preset fast medium #{sq src} #{sq tmp}" or raise "Error"
 
 					tmp_size = File.size tmp
 					src_size = File.size src
