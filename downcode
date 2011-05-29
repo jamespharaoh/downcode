@@ -121,83 +121,93 @@ class ReencodeScript
 		end
 	end
 
-	def reencode_files
-		@todo.each do |src, dst, ext|
-			wav = "#{dst}.wav"
-			tmp = "#{dst}.tmp"
-			tmp1 = "#{dst}.tmp1"
-			begin
+	def reencode_mp3 src, dst, tmp, tmp1
+		system "lame --preset fast medium #{sq src} #{sq tmp}" or raise "Error"
 
-				puts ""
-				puts "----------------------------------------------------------------------"
-				puts "#{File.basename src}"
-				puts "----------------------------------------------------------------------"
-				puts ""
+		tmp_size = File.size tmp
+		src_size = File.size src
+		use_copy = src_size < tmp_size * (100 + @opts[:leeway]) / 100
 
-				case ext
+		if use_copy
+			puts "using copy instead"
+			FileUtils.cp src, tmp
+		end
 
-				when "mp3"
+		unless use_copy
+			puts "copying id3 tag"
+			src_tag = ID3Lib::Tag.new src
+			tmp_tag = ID3Lib::Tag.new tmp
+			src_tag.each do |frame| tmp_tag << frame end
+			tmp_tag.update!
+		end
 
-					system "lame --preset fast medium #{sq src} #{sq tmp}" or raise "Error"
+		FileUtils.mv tmp, dst
+	end
 
-					tmp_size = File.size tmp
-					src_size = File.size src
-					use_copy = src_size < tmp_size * (100 + @opts[:leeway]) / 100
+	def reencode_ogg src, dst, tmp, tmp1
 
-					if use_copy
-						puts "using copy instead"
-						FileUtils.cp src, tmp
-					end
+		# reencode
+		system "oggdec #{sq src} --output #{sq tmp1}" or raise "Error"
+		system "oggenc --quality 4 #{sq tmp1} --output #{sq tmp}" or raise "Error"
 
-					unless use_copy
-						puts "copying id3 tag"
-						src_tag = ID3Lib::Tag.new src
-						tmp_tag = ID3Lib::Tag.new tmp
-						src_tag.each do |frame| tmp_tag << frame end
-						tmp_tag.update!
-					end
+		# check size
+		tmp_size = File.size tmp
+		src_size = File.size src
+		use_copy = src_size < tmp_size * (100 + @opts[:leeway]) / 100
 
-					FileUtils.mv tmp, dst
+		# use copy if appropriate
+		if use_copy
+			puts "using copy instead"
+			FileUtils.cp src, tmp
+		end
 
-				when "ogg"
-
-					# reencode
-					system "oggdec #{sq src} --output #{sq wav}" or raise "Error"
-					system "oggenc --quality 4 #{sq wav} --output #{sq tmp}" or raise "Error"
-
-					tmp_size = File.size tmp
-					src_size = File.size src
-					use_copy = src_size < tmp_size * (100 + @opts[:leeway]) / 100
-
-					if use_copy
-						puts "using copy instead"
-						FileUtils.cp src, tmp
-					end
-
-					unless use_copy
-						puts "copying ogg comments"
-						comments = []
-						%x[ oggz comment --list #{sq src} ].split("\n").each do |line|
-							next unless line =~ /\t([A-Z0-9_]+): (.*)$/
-							name, value = $1, $2
-							comments << "#{sq name}=#{sq value}"
-						end
-						system "oggz comment --content-type vorbis --output #{sq tmp1} #{sq tmp} #{comments.join " "}" \
-							or raise "Error"
-						FileUtils.mv tmp1, tmp
-					end
-
-					FileUtils.mv tmp, dst
-
-				else
-					raise "Internal error"
-				end
-
-			ensure
-				File.delete wav if File.exist? wav
-				File.delete tmp if File.exist? tmp
-				File.delete tmp1 if File.exist? tmp1
+		# copy metadata unless it's a copy
+		unless use_copy
+			puts "copying ogg comments"
+			comments = []
+			%x[ oggz comment --list #{sq src} ].split("\n").each do |line|
+				next unless line =~ /\t([A-Z0-9_]+): (.*)$/
+				name, value = $1, $2
+				comments << "#{sq name}=#{sq value}"
 			end
+			system "oggz comment --content-type vorbis --output #{sq tmp1} #{sq tmp} #{comments.join " "}" \
+				or raise "Error"
+			FileUtils.mv tmp1, tmp
+		end
+	end
+
+	def reencode_file src, dst, ext
+		wav = "#{dst}.wav"
+		tmp = "#{dst}.tmp"
+		tmp1 = "#{dst}.tmp1"
+		begin
+
+			puts ""
+			puts "----------------------------------------------------------------------"
+			puts "#{File.basename src}"
+			puts "----------------------------------------------------------------------"
+			puts ""
+
+			respond_to? "reencode_#{ext}" or raise "Internal error"
+			send "reencode_#{ext}", src, dst, tmp, tmp1
+
+			FileUtils.mv tmp, dst
+
+		rescue
+
+			@errors << src
+
+		ensure
+			File.delete wav if File.exist? wav
+			File.delete tmp if File.exist? tmp
+			File.delete tmp1 if File.exist? tmp1
+		end
+	end
+
+	def reencode_files
+		@errors = []
+		@todo.each do |src, dst, ext|
+			reencode_file src, dst, ext
 		end
 	end
 
