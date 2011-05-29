@@ -1,0 +1,53 @@
+DOWNCODE
+
+Simple script to reencode a library of OGG Vorbis and MP3 file to a smaller
+size for use with a space restricted MP3 player, while preserving ID3 tags and
+OGG comments.
+
+Please contact me with any comments, suggestions, questions.
+
+James Pharaoh <james@phsys.co.uk>
+
+INFORMATION
+
+The script is designed to run incrementally, and will detect changes (based on
+modification time) and deletions.
+
+Typical usage is as follows:
+
+$ downcode --source music/faves --dest mp3/faves --delete
+
+I imagine you'd write a short shell script to invoke downcode with the right
+parameters, possibly multiple times, and simply run it after modifying your
+music colleciton, or before syncing to your device.
+
+FUTURE FEATURES
+
+Let me know if anyone is interested in any of these.
+
+* Improved output - I want to clear the screen and show current progress at the
+  top after each file, with the command output underneath.
+
+* Format change - It would be nice to output all OGG or all MP3, but this makes
+  the tag handling much more complicated.
+
+* Parallel processing - I have a four core processor, it would be nice to
+  specify how many of them to use.
+
+* Filters - It should be possible to specify which files to include or exclude
+  in an interesting way, and so be able to more manage a larger collection.
+
+* More intelligent deleting - It would probably be quite easy to wipe out a
+  whole directory if you pass the wrong arguments with the --delete option. I
+  could probably detect and handle this better.
+
+* Other files - Currently any non MP3 or OGG files are simply skipped. Instead
+  we should have an option to copy them, probably based on extension.
+
+* Filename conversion - My linux filesystem supports characters which my MP3
+  player doesn't. We should substitute these as we go.
+
+* Quality options - The quality of the output is hardcoded. This should be
+  available as command line options, or maybe a config file.
+
+Please email me with any suggestions.

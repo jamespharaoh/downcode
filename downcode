@@ -1,0 +1,205 @@
+#!/usr/bin/ruby1.9.1
+#
+# Copyright 2011 James Pharaoh <james@phsys.co.uk>
+#
+#   Licensed under the Apache License, Version 2.0 (the "License");
+#   you may not use this file except in compliance with the License.
+#   You may obtain a copy of the License at
+#
+#       http://www.apache.org/licenses/LICENSE-2.0
+#
+#   Unless required by applicable law or agreed to in writing, software
+#   distributed under the License is distributed on an "AS IS" BASIS,
+#   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#   See the License for the specific language governing permissions and
+#   limitations under the License.
+#
+
+require "rubygems"
+
+require "fileutils"
+require "id3lib"
+require "ogginfo"
+require "optparse"
+require "pp"
+
+def sq str
+	return str if str =~ /^[-a-zA-Z0-9_\/:.=@]+$/
+	return "'" + str.gsub("'", "'\\\\''") + "'" unless str =~ /'/
+	return "\"" + str.gsub("\\", "\\\\\\\\").gsub("\"", "\\\\\"").gsub("`", "\\\\`").gsub("$", "\\\\$") + "\""
+end
+
+class ReencodeScript
+
+	attr_accessor :args
+	attr_accessor :status
+	attr_accessor :leeway_percent
+
+	def initialize
+		@leeway_percent = 25
+	end
+
+	def main
+		process_args
+		scan_source
+		delete_files
+		reencode_files
+	end
+
+	def process_args
+		@opts = {}
+		op = OptionParser.new do |opts|
+			opts.banner = "Usage: #{File.basename $0} [OPTIONS]"
+			opts.on "-s", "--source DIR", "Source directory - required" do |arg|
+				@opts[:source] and raise "Can't specify multiple sources"
+				@opts[:source] = arg.gsub /\/$/, ""
+			end
+			opts.on "-d", "--destination DIR", "Destination directory - required" do |arg|
+				@opts[:dest] and raise "Can't specify multiple destinations"
+				@opts[:dest] = arg.gsub /\/$/, ""
+			end
+			@opts[:delete] = false
+			opts.on "--delete", "Delete removed files" do
+				@opts[:delete] = true
+			end
+		end
+		op.parse! @args
+		@opts[:source] or raise "Must specify source"
+		@opts[:dest] or raise "Must specify destination"
+	end
+
+	def scan_source
+		@todo = []
+		@delete = []
+		up_to_date = 0
+		skipped = {}
+		Dir["#{@opts[:source]}/**"].each do |src|
+			src =~ /^.+\.([^.]+)$/
+			ext = $1
+			if [ "mp3", "ogg" ].include? ext
+				dst = src.gsub /^#{Regexp.escape @opts[:source]}/, @opts[:dest]
+				if File.exist?(dst) && File.mtime(src) < File.mtime(dst)
+					up_to_date += 1
+				else
+					@todo << [ src, dst, ext ]
+				end
+			else
+				skipped[ext] ||= 0
+				skipped[ext] += 1
+			end
+		end
+		Dir["#{@opts[:dest]}/**"].each do |dst|
+			src = dst.gsub /^#{Regexp.escape @opts[:dest]}/, @opts[:source]
+			next if File.exist? src
+			@delete << dst
+		end
+
+		puts "Files to convert: #{@todo.size}"
+		puts "Files to delete: #{@delete.size}"
+		puts "Already up to date: #{up_to_date}"
+		skipped.each do |ext, count|
+			if ext
+				puts "Skipped with extension #{ext}: #{count}"
+			else
+				puts "Skipped with no extension: #{count}"
+			end
+		end
+	end
+
+	def delete_files
+		unless @opts[:delete]
+			puts "Skipping delete stage (specify --delete to not skip)"
+			return
+		end
+		@delete.each do |dst|
+			puts "Deleting #{dst}"
+			File.delete dst
+		end
+	end
+
+	def reencode_files
+		@todo.each do |src, dst, ext|
+			wav = "#{dst}.wav"
+			tmp = "#{dst}.tmp"
+			tmp1 = "#{dst}.tmp1"
+			begin
+
+				puts ""
+				puts "----------------------------------------------------------------------"
+				puts "#{File.basename src}"
+				puts "----------------------------------------------------------------------"
+				puts ""
+
+				case ext
+
+				when "mp3"
+
+					system "lame --preset fast extreme #{sq src} #{sq tmp}" or raise "Error"
+
+					tmp_size = File.size tmp
+					src_size = File.size src
+					use_copy = src_size < tmp_size * (100 + @leeway_percent) / 100
+
+					if use_copy
+						puts "using copy instead"
+						FileUtils.cp src, tmp
+					end
+
+					unless use_copy
+						puts "copying id3 tag"
+						src_tag = ID3Lib::Tag.new src
+						tmp_tag = ID3Lib::Tag.new tmp
+						src_tag.each do |frame| tmp_tag << frame end
+						tmp_tag.update!
+					end
+
+					FileUtils.mv tmp, dst
+
+				when "ogg"
+
+					# reencode
+					system "oggdec #{sq src} --output #{sq wav}" or raise "Error"
+					system "oggenc --quality 4 #{sq wav} --output #{sq tmp}" or raise "Error"
+
+					tmp_size = File.size tmp
+					src_size = File.size src
+					use_copy = src_size < tmp_size * (100 + @leeway_percent) / 100
+
+					if use_copy
+						puts "using copy instead"
+						FileUtils.cp src, tmp
+					end
+
+					unless use_copy
+						puts "copying ogg comments"
+						comments = []
+						%x[ oggz comment --list #{sq src} ].split("\n").each do |line|
+							next unless line =~ /\t([A-Z0-9_]+): (.*)$/
+							name, value = $1, $2
+							comments << "#{sq name}=#{sq value}"
+						end
+						system "oggz comment --content-type vorbis --output #{sq tmp1} #{sq tmp} #{comments.join " "}" \
+							or raise "Error"
+						FileUtils.mv tmp1, tmp
+					end
+
+					FileUtils.mv tmp, dst
+
+				else
+					raise "Internal error"
+				end
+
+			ensure
+				File.delete wav if File.exist? wav
+				File.delete tmp if File.exist? tmp
+				File.delete tmp1 if File.exist? tmp1
+			end
+		end
+	end
+
+end
+
+script = ReencodeScript.new
+script.args = ARGV
+script.main
+exit script.status || 0
