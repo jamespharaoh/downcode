@@ -33,10 +33,8 @@ class ReencodeScript
 
 	attr_accessor :args
 	attr_accessor :status
-	attr_accessor :leeway_percent
 
 	def initialize
-		@leeway_percent = 25
 	end
 
 	def main
@@ -61,6 +59,11 @@ class ReencodeScript
 			@opts[:delete] = false
 			opts.on "--delete", "Delete removed files" do
 				@opts[:delete] = true
+			end
+			@opts[:leeway] = 10
+			opts.on "--leeway PERCENT", "Use original file if it's less than this much bigger than the re-encoded " +
+					"version" do |arg|
+				@opts[:leeway] = arg.to_i
 			end
 		end
 		op.parse! @args
@@ -104,6 +107,7 @@ class ReencodeScript
 				puts "Skipped with no extension: #{count}"
 			end
 		end
+		puts "Use original leeway: #{@opts[:leeway]}%"
 	end
 
 	def delete_files
@@ -138,7 +142,7 @@ class ReencodeScript
 
 					tmp_size = File.size tmp
 					src_size = File.size src
-					use_copy = src_size < tmp_size * (100 + @leeway_percent) / 100
+					use_copy = src_size < tmp_size * (100 + @opts[:leeway]) / 100
 
 					if use_copy
 						puts "using copy instead"
@@ -163,7 +167,7 @@ class ReencodeScript
 
 					tmp_size = File.size tmp
 					src_size = File.size src
-					use_copy = src_size < tmp_size * (100 + @leeway_percent) / 100
+					use_copy = src_size < tmp_size * (100 + @opts[:leeway]) / 100
 
 					if use_copy
 						puts "using copy instead"
