@@ -29,7 +29,7 @@ def sq str
 	return "\"" + str.gsub("\\", "\\\\\\\\").gsub("\"", "\\\\\"").gsub("`", "\\\\`").gsub("$", "\\\\$") + "\""
 end
 
-class ReencodeScript
+class DowncodeScript
 
 	attr_accessor :args
 	attr_accessor :status
@@ -41,7 +41,7 @@ class ReencodeScript
 		process_args
 		scan_source
 		delete_files
-		reencode_files
+		downcode_files
 	end
 
 	def process_args
@@ -76,7 +76,8 @@ class ReencodeScript
 		@delete = []
 		up_to_date = 0
 		skipped = {}
-		Dir["#{@opts[:source]}/**"].each do |src|
+		Dir["#{@opts[:source]}/**/*"].each do |src|
+			next if File.directory? src
 			src =~ /^.+\.([^.]+)$/
 			ext = $1
 			if [ "mp3", "ogg" ].include? ext
@@ -91,7 +92,8 @@ class ReencodeScript
 				skipped[ext] += 1
 			end
 		end
-		Dir["#{@opts[:dest]}/**"].each do |dst|
+		Dir["#{@opts[:dest]}/**/*"].each do |dst|
+			next if File.directory? dst
 			src = dst.gsub /^#{Regexp.escape @opts[:dest]}/, @opts[:source]
 			next if File.exist? src
 			@delete << dst
@@ -121,7 +123,7 @@ class ReencodeScript
 		end
 	end
 
-	def reencode_mp3 src, dst, tmp, tmp1
+	def downcode_mp3 src, dst, tmp, tmp1
 		system "lame --preset fast medium #{sq src} #{sq tmp}" or raise "Error"
 
 		tmp_size = File.size tmp
@@ -140,13 +142,11 @@ class ReencodeScript
 			src_tag.each do |frame| tmp_tag << frame end
 			tmp_tag.update!
 		end
-
-		FileUtils.mv tmp, dst
 	end
 
-	def reencode_ogg src, dst, tmp, tmp1
+	def downcode_ogg src, dst, tmp, tmp1
 
-		# reencode
+		# downcode
 		system "oggdec #{sq src} --output #{sq tmp1}" or raise "Error"
 		system "oggenc --quality 4 #{sq tmp1} --output #{sq tmp}" or raise "Error"
 
@@ -176,7 +176,7 @@ class ReencodeScript
 		end
 	end
 
-	def reencode_file src, dst, ext
+	def downcode_file src, dst, ext
 		wav = "#{dst}.wav"
 		tmp = "#{dst}.tmp"
 		tmp1 = "#{dst}.tmp1"
@@ -188,14 +188,15 @@ class ReencodeScript
 			puts "----------------------------------------------------------------------"
 			puts ""
 
-			respond_to? "reencode_#{ext}" or raise "Internal error"
-			send "reencode_#{ext}", src, dst, tmp, tmp1
+			respond_to? "downcode_#{ext}" or raise "Internal error"
+			FileUtils.mkdir_p File.dirname dst
+			begin
+				send "downcode_#{ext}", src, dst, tmp, tmp1
+			rescue
+				@errors << src
+			end
 
 			FileUtils.mv tmp, dst
-
-		rescue
-
-			@errors << src
 
 		ensure
 			File.delete wav if File.exist? wav
@@ -204,16 +205,16 @@ class ReencodeScript
 		end
 	end
 
-	def reencode_files
+	def downcode_files
 		@errors = []
 		@todo.each do |src, dst, ext|
-			reencode_file src, dst, ext
+			downcode_file src, dst, ext
 		end
 	end
 
 end
 
-script = ReencodeScript.new
+script = DowncodeScript.new
 script.args = ARGV
 script.main
 exit script.status || 0
