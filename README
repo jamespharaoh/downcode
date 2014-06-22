@@ -21,6 +21,9 @@ I imagine you'd write a short shell script to invoke downcode with the right
 parameters, possibly multiple times, and simply run it after modifying your
 music colleciton, or before syncing to your device.
 
+The script also replaces certain characters which won't work on a FAT file
+system.
+
 FUTURE FEATURES
 
 Let me know if anyone is interested in any of these.
@@ -45,7 +48,8 @@ Let me know if anyone is interested in any of these.
   we should have an option to copy them, probably based on extension.
 
 * Filename conversion - My linux filesystem supports characters which my MP3
-  player doesn't. We should substitute these as we go.
+  player doesn't. I substitute only a small number of these, this could be
+  done better somehow.
 
 * Quality options - The quality of the output is hardcoded. This should be
   available as command line options, or maybe a config file.

@@ -1,6 +1,7 @@
-#!/usr/bin/ruby1.9.1
+#!/usr/bin/env ruby
+#encoding: utf-8
 #
-# Copyright 2011 James Pharaoh <james@phsys.co.uk>
+# Copyright 2011-4 James Pharaoh <james@phsys.co.uk>
 #
 #   Licensed under the Apache License, Version 2.0 (the "License");
 #   you may not use this file except in compliance with the License.
@@ -22,6 +23,7 @@ require "id3lib"
 require "ogginfo"
 require "optparse"
 require "pp"
+require "set"
 
 def sq str
 	return str if str =~ /^[-a-zA-Z0-9_\/:.=@]+$/
@@ -31,10 +33,21 @@ end
 
 class DowncodeScript
 
+	DEFAULT_MAPPINGS = {
+		"*" => "_",
+		"\"" => "''",
+		"\\" => "_",
+		"?" => "_",
+		":" => "_",
+		"é" => "e",
+	}
+
 	attr_accessor :args
 	attr_accessor :status
+	attr_accessor :mappings
 
 	def initialize
+		@mappings = DEFAULT_MAPPINGS
 	end
 
 	def main
@@ -71,37 +84,61 @@ class DowncodeScript
 		@opts[:dest] or raise "Must specify destination"
 	end
 
+	def map string
+		ret = ""
+		string.each_char do |ch|
+			ret += @mappings[ch] ? @mappings[ch] : ch
+		end
+		return ret
+	end
+
 	def scan_source
 		@todo = []
 		@delete = []
 		up_to_date = 0
 		skipped = {}
+		dsts = Set.new
+
 		Dir["#{@opts[:source]}/**/*"].each do |src|
+
+			# work out dest filename and remember it
+			dst = @opts[:dest] + map(src[@opts[:source].length..-1])
+			dsts << dst
+
+			# skip directories
 			next if File.directory? src
+
+			# check the extension
 			src =~ /^.+\.([^.]+)$/
 			ext = $1
 			if [ "mp3", "ogg" ].include? ext
-				dst = src.gsub /^#{Regexp.escape @opts[:source]}/, @opts[:dest]
+
+				# add to update list or no update count
 				if File.exist?(dst) && File.mtime(src) < File.mtime(dst)
 					up_to_date += 1
 				else
 					@todo << [ src, dst, ext ]
 				end
+
 			else
+
+				# add to skipped list
 				skipped[ext] ||= 0
 				skipped[ext] += 1
+
 			end
 		end
+
 		Dir["#{@opts[:dest]}/**/*"].each do |dst|
-			next if File.directory? dst
-			src = dst.gsub /^#{Regexp.escape @opts[:dest]}/, @opts[:source]
-			next if File.exist? src
+			next if dsts.include? dst
+			next if dst =~ /\.(lock|tmp|tmp1)$/
 			@delete << dst
 		end
 
 		puts "Files to convert: #{@todo.size}"
 		puts "Files to delete: #{@delete.size}"
 		puts "Already up to date: #{up_to_date}"
+
 		skipped.each do |ext, count|
 			if ext
 				puts "Skipped with extension #{ext}: #{count}"
@@ -109,22 +146,37 @@ class DowncodeScript
 				puts "Skipped with no extension: #{count}"
 			end
 		end
+
 		puts "Use original leeway: #{@opts[:leeway]}%"
+
 	end
 
 	def delete_files
+
 		unless @opts[:delete]
 			puts "Skipping delete stage (specify --delete to not skip)"
 			return
 		end
+
 		@delete.each do |dst|
 			puts "Deleting #{dst}"
-			File.delete dst
+			if File.directory? dst
+				FileUtils.rm_r dst
+			elsif File.exists? dst
+				File.delete dst
+			end
 		end
+
 	end
 
 	def downcode_mp3 src, dst, tmp, tmp1
-		system "lame --preset fast medium #{sq src} #{sq tmp}" or raise "Error"
+
+		system "
+			lame \
+				--preset fast medium \
+				#{sq src} \
+				#{sq tmp}
+		" or raise "Error"
 
 		tmp_size = File.size tmp
 		src_size = File.size src
@@ -147,39 +199,66 @@ class DowncodeScript
 	def downcode_ogg src, dst, tmp, tmp1
 
 		# downcode
+
 		system "oggdec #{sq src} --output #{sq tmp1}" or raise "Error"
 		system "oggenc --quality 4 #{sq tmp1} --output #{sq tmp}" or raise "Error"
 
 		# check size
+
 		tmp_size = File.size tmp
 		src_size = File.size src
+
 		use_copy = src_size < tmp_size * (100 + @opts[:leeway]) / 100
 
 		# use copy if appropriate
+
 		if use_copy
 			puts "using copy instead"
 			FileUtils.cp src, tmp
 		end
 
 		# copy metadata unless it's a copy
+
 		unless use_copy
+
 			puts "copying ogg comments"
+
 			comments = []
+
 			%x[ oggz comment --list #{sq src} ].split("\n").each do |line|
 				next unless line =~ /\t([A-Z0-9_]+): (.*)$/
 				name, value = $1, $2
 				comments << "#{sq name}=#{sq value}"
 			end
-			system "oggz comment --content-type vorbis --output #{sq tmp1} #{sq tmp} #{comments.join " "}" \
-				or raise "Error"
+
+			system "
+				oggz comment \
+					--content-type vorbis \
+					--output #{sq tmp1} \
+					#{sq tmp} \
+					#{comments.join " "}
+			" or raise "Error"
+
 			FileUtils.mv tmp1, tmp
+
 		end
+
 	end
 
 	def downcode_file src, dst, ext
+
 		wav = "#{dst}.wav"
 		tmp = "#{dst}.tmp"
 		tmp1 = "#{dst}.tmp1"
+		lock = "#{dst}.lock"
+
+		lock_fp = nil
+
+		FileUtils.mkdir_p File.dirname dst
+
+		lock_fp = File.open(lock, File::RDWR|File::CREAT, 0644)
+		val = lock_fp.flock(File::LOCK_EX|File::LOCK_NB)
+
 		begin
 
 			puts ""
@@ -188,28 +267,38 @@ class DowncodeScript
 			puts "----------------------------------------------------------------------"
 			puts ""
 
-			respond_to? "downcode_#{ext}" or raise "Internal error"
-			FileUtils.mkdir_p File.dirname dst
-			begin
-				send "downcode_#{ext}", src, dst, tmp, tmp1
-			rescue
-				@errors << src
-			end
+			respond_to? "downcode_#{ext}" \
+				or raise "File extension #{ext} not supported"
 
+			send "downcode_#{ext}", src, dst, tmp, tmp1
 			FileUtils.mv tmp, dst
 
+		rescue
+			@errors << src
+
 		ensure
+
 			File.delete wav if File.exist? wav
 			File.delete tmp if File.exist? tmp
 			File.delete tmp1 if File.exist? tmp1
+
+			if File.exist? lock
+				lock_fp.close
+				File.delete lock
+			end
+
 		end
+
 	end
 
 	def downcode_files
+
 		@errors = []
+
 		@todo.each do |src, dst, ext|
 			downcode_file src, dst, ext
 		end
+
 	end
 
 end
